@@ -45,6 +45,7 @@ from typing import Dict, Optional, Any
 from dataclasses import dataclass, field
 from enum import Enum
 import threading
+import os
 
 
 # =============================================================================
@@ -143,7 +144,8 @@ class KeyManagementService:
         self, 
         device_id: str, 
         force_eve_attack: bool = False,
-        num_bits: int = 512
+        num_bits: int = 512,
+        pqc_enabled: bool = False
     ) -> bytes:
         """
         Generate and issue a fresh encryption key for a device.
@@ -167,6 +169,7 @@ class KeyManagementService:
             device_id: Unique identifier for the requesting device
             force_eve_attack: If True, simulate eavesdropper for demo/testing
             num_bits: Number of qubits for BB84 (default: 512)
+            pqc_enabled: If True, use hybrid PQC (BB84 + simulated Kyber) derivation
         
         Returns:
             32-byte (256-bit) AES session key
@@ -245,6 +248,35 @@ class KeyManagementService:
                 backend=default_backend()
             )
             session_key = hkdf.derive(raw_key)
+            
+            # =================================================================
+            # PHASE 3b: Hybrid PQC Key Derivation (Extra Credit)
+            # =================================================================
+            # When pqc_enabled=True, we combine the BB84-derived key with a
+            # simulated Kyber KEM shared secret for hybrid quantum safety.
+            #
+            # In a production system, this would use a real Kyber768 or
+            # ML-KEM-768 encapsulation. For this prototype, we simulate the
+            # Kyber shared secret with os.urandom(32) to demonstrate the
+            # hybrid key derivation architecture.
+            #
+            # Hybrid approach: final_key = HKDF(BB84_key || Kyber_key)
+            # This ensures security even if one primitive is broken.
+            
+            if pqc_enabled:
+                # Simulated Kyber KEM shared secret (placeholder for real PQC)
+                kyber_shared_secret = os.urandom(32)  # 256-bit Kyber output
+                hybrid_input = session_key + kyber_shared_secret  # 64 bytes
+                
+                hybrid_hkdf = HKDF(
+                    algorithm=hashes.SHA256(),
+                    length=32,
+                    salt=None,
+                    info=b"QSTCS-Hybrid-PQC",
+                    backend=default_backend()
+                )
+                session_key = hybrid_hkdf.derive(hybrid_input)
+                print(f"[KMS] 🧬 Hybrid PQC derivation applied (BB84 + simulated Kyber)")
             
             # =================================================================
             # PHASE 4: Session Recording
