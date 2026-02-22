@@ -1,30 +1,16 @@
 """
-Chat Client Application
-========================
-Quantum-Safe Tactical Communication System - Field Device Client
+Chat Client
+============
+Quantum-Safe Tactical Communication System — Field Device
 
-Interactive terminal-based chat client that:
-1. Fetches a quantum-derived AES-256 session key from the KMS server
-2. Connects to the Chat Server via WebSocket
-3. Encrypts outgoing messages with AES-256-GCM
-4. Decrypts incoming messages and verifies authenticity
+Terminal chat client that:
+1. Creates or joins a key exchange session with a specific peer
+2. Both sides get the same AES-256 key derived from BB84 + HKDF
+3. Connects to the chat server via WebSocket
+4. Encrypts/decrypts all messages with AES-256-GCM
 
-ENCRYPTION:
------------
-Uses the exact same AES-256-GCM scheme as devices/client.py:
-  - 256-bit key from BB84 + HKDF
-  - 12-byte (96-bit) random nonce per message
-  - 128-bit authentication tag for tamper detection
-
-USAGE:
-------
+Run with:
     python client_app.py
-
-You will be prompted for:
-  - device_id   (e.g., "Soldier_Alpha")
-  - recipient   (e.g., "Soldier_Bravo")
-  - kms_url     (default: http://localhost:8000)
-  - chat_url    (default: ws://localhost:8765)
 
 Author: QSTCS Development Team
 Classification: UNCLASSIFIED
@@ -40,171 +26,117 @@ from typing import Optional
 try:
     import httpx
 except ImportError:
-    print("[Client] ERROR: 'httpx' not installed. Run: pip install httpx>=0.27.0")
+    print("ERROR: pip install httpx")
     sys.exit(1)
 
 try:
     import websockets
 except ImportError:
-    print("[Client] ERROR: 'websockets' not installed. Run: pip install websockets>=12.0")
+    print("ERROR: pip install websockets")
     sys.exit(1)
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
 # =============================================================================
-# CRYPTO HELPERS (mirrors devices/client.py exactly)
+# AES-256-GCM CRYPTO
 # =============================================================================
 
-def encrypt_message(key: bytes, plaintext: str, sender: str, recipient: str) -> dict:
-    """
-    Encrypt a plaintext message using AES-256-GCM.
-
-    Uses the same format as SoldierDevice.send_encrypted_message():
-      - 12-byte random nonce (CRITICAL: never reuse with same key)
-      - AES-256-GCM authenticated encryption
-      - Returns JSON-serializable packet
-
-    Args:
-        key: 32-byte AES-256 session key
-        plaintext: Message string to encrypt
-        sender: Sender device ID
-        recipient: Recipient device ID
-
-    Returns:
-        Message packet dict ready for WebSocket transmission
-    """
-    cipher = AESGCM(key)
-    nonce = os.urandom(12)  # 96-bit random nonce
-    ciphertext = cipher.encrypt(nonce, plaintext.encode("utf-8"), None)
-
+def encrypt(key: bytes, plaintext: str, sender: str, recipient: str) -> dict:
+    """Encrypt plaintext with AES-256-GCM. 12-byte nonce, 128-bit tag."""
+    nonce = os.urandom(12)
+    ct = AESGCM(key).encrypt(nonce, plaintext.encode("utf-8"), None)
     return {
         "type": "chat",
         "sender": sender,
         "recipient": recipient,
         "nonce": nonce.hex(),
-        "ciphertext": ciphertext.hex(),
+        "ciphertext": ct.hex(),
         "timestamp": int(time.time()),
     }
 
 
-def decrypt_message(key: bytes, packet: dict) -> Optional[str]:
-    """
-    Decrypt and verify an incoming AES-256-GCM encrypted message.
-
-    Args:
-        key: 32-byte AES-256 session key
-        packet: Received message packet with nonce and ciphertext
-
-    Returns:
-        Decrypted plaintext string, or None if verification fails
-    """
+def decrypt(key: bytes, packet: dict) -> Optional[str]:
+    """Decrypt and verify an AES-256-GCM message."""
     try:
-        cipher = AESGCM(key)
         nonce = bytes.fromhex(packet["nonce"])
-        ciphertext = bytes.fromhex(packet["ciphertext"])
-        plaintext_bytes = cipher.decrypt(nonce, ciphertext, None)
-        return plaintext_bytes.decode("utf-8")
+        ct = bytes.fromhex(packet["ciphertext"])
+        return AESGCM(key).decrypt(nonce, ct, None).decode("utf-8")
     except Exception as e:
-        print(f"  ❌ Decryption failed: {e}")
         return None
 
 
 # =============================================================================
-# KMS CLIENT
+# SESSION-BASED KEY EXCHANGE
 # =============================================================================
 
-def fetch_session_key(kms_url: str, device_id: str, pqc: bool = False) -> Optional[bytes]:
+def establish_key(kms_url: str, device_id: str, peer_id: str) -> Optional[tuple]:
     """
-    Request a quantum-derived session key from the KMS server.
+    Establish a shared key with the peer through the KMS.
 
-    Calls POST /get_session_key and parses the response.
-    If an attack is detected (status=RED), returns None.
-
-    Args:
-        kms_url: Base URL of the KMS server (e.g., http://192.168.1.100:8000)
-        device_id: This device's identifier
-        pqc: Enable hybrid PQC key derivation
+    Tries to create a session first. If the peer already created one,
+    joins that session instead.
 
     Returns:
-        32-byte session key, or None if key exchange failed
+        (key_bytes, session_id, qber) or None on failure
     """
-    endpoint = f"{kms_url}/get_session_key"
+    with httpx.Client(timeout=10.0) as client:
+        # Try to create a session (we're the initiator)
+        print(f"[{device_id}] Requesting key exchange with {peer_id}...")
 
-    try:
-        with httpx.Client(timeout=10.0) as client:
-            response = client.post(
-                endpoint,
-                json={"device_id": device_id, "force_attack": False, "pqc": pqc},
-            )
-            data = response.json()
+        resp = client.post(
+            f"{kms_url}/create_session",
+            json={"initiator": device_id, "peer": peer_id},
+        )
+        data = resp.json()
 
         if "error" in data:
-            print(f"  ❌ Key request FAILED: {data['error']}")
-            print(f"  ⚠️  QBER = {data.get('qber', 'N/A')}")
-            print(f"  🔴 Link Status: {data.get('status', 'UNKNOWN')}")
+            # Session creation failed — maybe QBER too high
+            print(f"[{device_id}] ❌ Key exchange failed: {data['error']}")
+            print(f"[{device_id}]    Status: {data.get('status', '?')} | "
+                  f"QBER: {data.get('qber', '?')}")
             return None
 
-        key_hex = data["key_hex"]
-        qber = data.get("qber", 0)
-        status = data.get("status", "UNKNOWN")
-        pqc_on = data.get("pqc_enabled", False)
+        if "key_hex" in data:
+            key = bytes.fromhex(data["key_hex"])
+            sid = data["session_id"]
+            qber = data["qber"]
+            print(f"[{device_id}] ✓ Session {sid} | "
+                  f"QBER={qber:.2%} | Status={data['status']}")
+            return key, sid, qber
 
-        key_bytes = bytes.fromhex(key_hex)
-
-        print(f"  ✓ Quantum key established ({len(key_bytes) * 8}-bit AES)")
-        print(f"  ✓ QBER = {qber:.2%} | Status: {status}"
-              + (f" | PQC Hybrid: ON" if pqc_on else ""))
-
-        return key_bytes
-
-    except httpx.ConnectError:
-        print(f"  ❌ Cannot reach KMS at {kms_url}")
-        print(f"     Make sure kms_server.py is running.")
-        return None
-    except Exception as e:
-        print(f"  ❌ Key fetch error: {e}")
+        print(f"[{device_id}] ❌ Unexpected response: {data}")
         return None
 
 
-def check_link_status(kms_url: str) -> Optional[dict]:
-    """Query the KMS for current link health."""
-    try:
-        with httpx.Client(timeout=5.0) as client:
-            response = client.get(f"{kms_url}/link_status")
-            return response.json()
-    except Exception:
-        return None
+def join_existing_session(kms_url: str, device_id: str, session_id: str) -> Optional[tuple]:
+    """Join a session that the peer already created."""
+    with httpx.Client(timeout=10.0) as client:
+        resp = client.post(
+            f"{kms_url}/join_session",
+            json={"session_id": session_id, "device_id": device_id},
+        )
+
+        if resp.status_code != 200:
+            print(f"[{device_id}] ❌ Join failed: {resp.text}")
+            return None
+
+        data = resp.json()
+        key = bytes.fromhex(data["key_hex"])
+        return key, data["session_id"], data["qber"]
 
 
 # =============================================================================
-# CHAT CLIENT
+# CHAT
 # =============================================================================
 
-async def sender_loop(
-    websocket,
-    key: bytes,
-    device_id: str,
-    recipient_id: str,
-    kms_url: str,
-):
-    """
-    Read user input from stdin and send encrypted messages.
-
-    Runs as an async task alongside the receiver loop.
-    Special commands:
-      /status  — Check link status from KMS
-      /rekey   — Request a fresh key
-      /quit    — Disconnect
-    """
+async def send_loop(ws, key, device_id, peer_id, kms_url):
+    """Read stdin, encrypt, send over WebSocket."""
     loop = asyncio.get_event_loop()
-    current_key = key
 
     while True:
         try:
-            # Read input in a thread to avoid blocking the event loop
             line = await loop.run_in_executor(None, sys.stdin.readline)
-
             if not line:
                 break
 
@@ -212,152 +144,79 @@ async def sender_loop(
             if not text:
                 continue
 
-            # Handle special commands
-            if text.lower() == "/quit":
-                print(f"[{device_id}] Disconnecting...")
-                await websocket.close()
+            if text == "/quit":
+                await ws.close()
                 break
-
-            elif text.lower() == "/status":
-                status = check_link_status(kms_url)
-                if status:
-                    print(f"  📊 Link: {status['status']} | QBER: {status['qber']:.2%} | "
-                          f"Keys: {status['total_keys_issued']} | "
-                          f"Attacks: {status['attacks_detected']}")
-                else:
-                    print(f"  ⚠️  Cannot reach KMS")
+            elif text == "/status":
+                try:
+                    with httpx.Client(timeout=5) as c:
+                        r = c.get(f"{kms_url}/link_status").json()
+                    print(f"  Link: {r['status']} | QBER: {r['qber']:.2%} | "
+                          f"Eve: {'ACTIVE' if r.get('eve_active') else 'off'} | "
+                          f"Sessions: {r['active_sessions']}")
+                except Exception as e:
+                    print(f"  KMS unreachable: {e}")
+                continue
+            elif text == "/help":
+                print("  /status  /quit  /help")
                 continue
 
-            elif text.lower() == "/rekey":
-                print(f"[{device_id}] Requesting fresh key...")
-                new_key = fetch_session_key(kms_url, device_id)
-                if new_key:
-                    current_key = new_key
-                    print(f"[{device_id}] ✓ Re-keyed successfully")
-                else:
-                    print(f"[{device_id}] ❌ Re-key failed")
-                continue
-
-            elif text.lower() == "/help":
-                print("  Commands: /status /rekey /quit /help")
-                continue
-
-            # Encrypt and send
-            packet = encrypt_message(current_key, text, device_id, recipient_id)
-            await websocket.send(json.dumps(packet))
-
-            ct_preview = packet["ciphertext"][:24] + "..."
-            print(f"  📤 Sent (encrypted): {ct_preview}")
+            packet = encrypt(key, text, device_id, peer_id)
+            await ws.send(json.dumps(packet))
 
         except websockets.exceptions.ConnectionClosed:
-            print(f"\n[{device_id}] ❌ Connection lost — quantum channel may be compromised.")
-            print(f"[{device_id}] The router may have blocked traffic (RED status).")
+            print(f"\n[{device_id}] Connection lost — router may have blocked traffic (RED).")
             break
         except Exception as e:
-            print(f"\n[{device_id}] ❌ Send error: {e}")
+            print(f"\n[{device_id}] Error: {e}")
             break
 
 
-async def receiver_loop(websocket, key: bytes, device_id: str):
-    """
-    Listen for incoming encrypted messages and decrypt them.
-
-    Runs as an async task alongside the sender loop.
-    """
+async def recv_loop(ws, key, device_id):
+    """Listen for incoming messages, decrypt, print."""
     try:
-        async for raw_message in websocket:
-            try:
-                data = json.loads(raw_message)
-            except json.JSONDecodeError:
-                continue
-
-            msg_type = data.get("type", "")
-
-            if msg_type == "chat":
-                sender = data.get("sender", "UNKNOWN")
-                plaintext = decrypt_message(key, data)
-
+        async for raw in ws:
+            data = json.loads(raw)
+            if data.get("type") == "chat":
+                sender = data.get("sender", "?")
+                plaintext = decrypt(key, data)
                 if plaintext:
-                    print(f"\n  📩 [{sender}]: {plaintext}")
-                    print(f"  > ", end="", flush=True)
+                    print(f"\n  [{sender}]: {plaintext}")
+                    print("  > ", end="", flush=True)
                 else:
-                    print(f"\n  ⚠️  Message from {sender} — decryption failed")
-                    print(f"  > ", end="", flush=True)
-
-            elif msg_type == "pong":
-                pass  # Keepalive response, ignore
-
+                    print(f"\n  [{sender}]: <decryption failed>")
+                    print("  > ", end="", flush=True)
     except websockets.exceptions.ConnectionClosed:
-        print(f"\n[{device_id}] ❌ Connection lost — quantum channel may be compromised.")
-        print(f"[{device_id}] The router may have blocked traffic (RED status).")
+        print(f"\n[{device_id}] Connection lost.")
     except Exception as e:
-        print(f"\n[{device_id}] ❌ Receive error: {e}")
+        print(f"\n[{device_id}] Recv error: {e}")
 
 
-async def run_client(device_id: str, recipient_id: str, kms_url: str, chat_url: str):
-    """
-    Main client loop: fetch key, connect, chat.
-    """
-    print()
-    print("=" * 60)
-    print(f"  QSTCS Secure Chat — {device_id}")
-    print("=" * 60)
-    print()
-
-    # --- Step 1: Fetch quantum-derived key from KMS ---
-    print(f"[{device_id}] Requesting quantum-derived session key...")
-    key = fetch_session_key(kms_url, device_id)
-
-    if key is None:
-        print(f"\n[{device_id}] Cannot establish secure channel. Exiting.")
-        return
-
-    # --- Step 2: Connect to Chat Server ---
-    print(f"\n[{device_id}] Connecting to chat server at {chat_url}...")
+async def chat(device_id, peer_id, kms_url, chat_url, key, session_id):
+    """Connect to chat server and run send/recv loops."""
+    print(f"[{device_id}] Connecting to {chat_url}...")
 
     try:
-        async with websockets.connect(chat_url) as websocket:
-            # Register with the chat server
-            reg_msg = json.dumps({"type": "register", "device_id": device_id})
-            await websocket.send(reg_msg)
-
-            print(f"[{device_id}] ✓ Connected to chat server")
-            print()
-            print("-" * 60)
-            print(f"  Chatting with: {recipient_id}")
-            print(f"  Encryption:   AES-256-GCM")
-            print(f"  Commands:     /status /rekey /quit /help")
-            print("-" * 60)
+        async with websockets.connect(chat_url) as ws:
+            await ws.send(json.dumps({"type": "register", "device_id": device_id}))
+            print(f"[{device_id}] Connected. Chatting with {peer_id}.")
+            print(f"  Session: {session_id} | Encryption: AES-256-GCM")
+            print(f"  Commands: /status /quit /help")
             print()
             print("  > ", end="", flush=True)
 
-            # --- Step 3: Run sender and receiver concurrently ---
-            sender_task = asyncio.create_task(
-                sender_loop(websocket, key, device_id, recipient_id, kms_url)
-            )
-            receiver_task = asyncio.create_task(
-                receiver_loop(websocket, key, device_id)
-            )
+            sender = asyncio.create_task(send_loop(ws, key, device_id, peer_id, kms_url))
+            receiver = asyncio.create_task(recv_loop(ws, key, device_id))
 
-            # Wait for either task to finish (disconnect or quit)
             done, pending = await asyncio.wait(
-                [sender_task, receiver_task],
-                return_when=asyncio.FIRST_COMPLETED,
+                [sender, receiver], return_when=asyncio.FIRST_COMPLETED
             )
+            for t in pending:
+                t.cancel()
 
-            # Cancel the other task
-            for task in pending:
-                task.cancel()
-
-    except websockets.exceptions.InvalidURI:
-        print(f"[{device_id}] ❌ Invalid chat server URL: {chat_url}")
     except OSError as e:
-        print(f"[{device_id}] ❌ Cannot connect to chat server: {e}")
-        print(f"[{device_id}] Make sure chat_server.py is running and the router allows traffic.")
-    except Exception as e:
-        print(f"[{device_id}] ❌ Connection error: {e}")
-
-    print(f"\n[{device_id}] Session ended.")
+        print(f"[{device_id}] Cannot connect to chat server: {e}")
+        print(f"  Is chat_server.py running? Is the router allowing traffic?")
 
 
 # =============================================================================
@@ -365,24 +224,39 @@ async def run_client(device_id: str, recipient_id: str, kms_url: str, chat_url: 
 # =============================================================================
 
 def main():
-    """Interactive setup and launch."""
     print()
-    print("╔══════════════════════════════════════════════════════════╗")
-    print("║   QSTCS — Quantum-Safe Tactical Communication System   ║")
-    print("║                   Field Device Client                   ║")
-    print("╚══════════════════════════════════════════════════════════╝")
+    print("╔══════════════════════════════════════════╗")
+    print("║  QSTCS — Quantum-Safe Secure Chat       ║")
+    print("╚══════════════════════════════════════════╝")
     print()
 
-    # Prompt for configuration
     device_id = input("  Device ID [Soldier_Alpha]: ").strip() or "Soldier_Alpha"
-    recipient_id = input("  Recipient [Soldier_Bravo]: ").strip() or "Soldier_Bravo"
-    kms_url = input("  KMS URL [http://localhost:8000]: ").strip() or "http://localhost:8000"
-    chat_url = input("  Chat URL [ws://localhost:8765]: ").strip() or "ws://localhost:8765"
+    peer_id = input("  Peer ID   [Soldier_Bravo]: ").strip() or "Soldier_Bravo"
+    kms_url = input("  KMS URL   [http://localhost:8000]: ").strip() or "http://localhost:8000"
+    chat_url = input("  Chat URL  [ws://localhost:8765]: ").strip() or "ws://localhost:8765"
+
+    # Option to join an existing session
+    session_id = input("  Session ID (leave blank to create new): ").strip()
+
+    print()
+
+    if session_id:
+        result = join_existing_session(kms_url, device_id, session_id)
+    else:
+        result = establish_key(kms_url, device_id, peer_id)
+
+    if result is None:
+        print(f"[{device_id}] Cannot establish secure channel. Exiting.")
+        return
+
+    key, sid, qber = result
+    print(f"[{device_id}] Key: {key.hex()[:16]}... ({len(key)*8}-bit)")
+    print()
 
     try:
-        asyncio.run(run_client(device_id, recipient_id, kms_url, chat_url))
+        asyncio.run(chat(device_id, peer_id, kms_url, chat_url, key, sid))
     except KeyboardInterrupt:
-        print(f"\n[{device_id}] Interrupted by user.")
+        print(f"\n[{device_id}] Disconnected.")
 
 
 if __name__ == "__main__":
