@@ -1,0 +1,19 @@
+# QSTCS - Quantum-Safe Tactical Communication System
+# Dependencies for Defense-Grade Prototype
+
+# Quantum Computing (optional - fallback to classical simulation if unavailable)
+# qiskit>=1.0.0
+# qiskit-aer>=0.14.0
+
+# Cryptography - Core security library
+cryptography>=42.0.0
+
+# Numerical computing
+numpy>=1.26.0
+
+# Dashboard
+streamlit>=1.32.0
+
+# Note: FastAPI not required for current demo (using direct function calls)
+# fastapi>=0.110.0
+# uvicorn>=0.27.0
