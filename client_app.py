@@ -19,6 +19,7 @@ Classification: UNCLASSIFIED
 import asyncio
 import json
 import os
+import socket
 import sys
 import time
 from typing import Optional
@@ -36,6 +37,22 @@ except ImportError:
     sys.exit(1)
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+
+# =============================================================================
+# NETWORK UTILITY
+# =============================================================================
+
+def get_lan_ip() -> str:
+    """Auto-detect this machine's LAN IP on the Wi-Fi network."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
 
 
 # =============================================================================
@@ -224,16 +241,21 @@ async def chat(device_id, peer_id, kms_url, chat_url, key, session_id):
 # =============================================================================
 
 def main():
+    lan_ip = get_lan_ip()
+    default_kms = f"http://{lan_ip}:8000"
+    default_chat = f"ws://{lan_ip}:8765"
+
     print()
     print("╔══════════════════════════════════════════╗")
     print("║  QSTCS — Quantum-Safe Secure Chat       ║")
     print("╚══════════════════════════════════════════╝")
+    print(f"  Detected LAN IP: {lan_ip}")
     print()
 
     device_id = input("  Device ID [Soldier_Alpha]: ").strip() or "Soldier_Alpha"
     peer_id = input("  Peer ID   [Soldier_Bravo]: ").strip() or "Soldier_Bravo"
-    kms_url = input("  KMS URL   [http://localhost:8000]: ").strip() or "http://localhost:8000"
-    chat_url = input("  Chat URL  [ws://localhost:8765]: ").strip() or "ws://localhost:8765"
+    kms_url = input(f"  KMS URL   [{default_kms}]: ").strip() or default_kms
+    chat_url = input(f"  Chat URL  [{default_chat}]: ").strip() or default_chat
 
     # Option to join an existing session
     session_id = input("  Session ID (leave blank to create new): ").strip()

@@ -30,8 +30,8 @@
 # =============================================================================
 
 # ---- CONFIGURATION ----
-KMS_HOST="192.168.1.100"    # IP of the machine running kms_server.py
-KMS_PORT="8000"             # KMS server port
+KMS_HOST="192.168.1.100"    # Change to YOUR laptop IP
+KMS_PORT="8000"
 CHAT_PORT="8765"            # Chat server WebSocket port
 POLL_INTERVAL=3             # Seconds between polls
 # ---- END CONFIGURATION ----
