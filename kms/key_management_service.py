@@ -1,517 +1,261 @@
 """
-Key Management Service (KMS)
-============================
-Quantum-Safe Tactical Communication System
-
-Central authority for cryptographic key lifecycle management. Bridges the
-quantum key distribution layer (BB84 simulator) with AES-256-GCM encryption.
-
-SESSION-BASED KEY DISTRIBUTION:
--------------------------------
-Keys are issued per (initiator, peer) session pair:
-  1. Device A creates a session targeting Device B  →  BB84 runs, key derived
-  2. Device B joins the session                     →  gets the same key
-Both devices must explicitly participate. No cached key tricks.
-
-SECURITY MODEL:
----------------
-- KMS operates within a trusted security perimeter
-- All key material exists only in volatile memory
-- QBER threshold enforcement prevents compromised key issuance
-- Session keys are bound to specific device pairs
-
-Author: QSTCS Development Team
-Classification: UNCLASSIFIED
+Key Management Service (KMS) core logic for the quantum-aware secure chat demo.
 """
 
-from quantum_engine.bb84_simulator import simulate_bb84, QBER_SECURITY_THRESHOLD
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.backends import default_backend
-from datetime import datetime
-from typing import Dict, Optional, Any, Tuple
-from dataclasses import dataclass, field
-from enum import Enum
-import threading
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Dict, Set, Optional
+import base64
 import os
+import threading
+import time
 import uuid
 
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import hashes
 
-# =============================================================================
-# DATA STRUCTURES
-# =============================================================================
+from quantum_engine.bb84_simulator import run_bb84_session
 
-class LinkStatus(Enum):
-    """Quantum link health status."""
-    GREEN = "GREEN"     # Link secure, keys can be issued
-    YELLOW = "YELLOW"   # Elevated QBER, proceed with caution
-    RED = "RED"         # Attack detected, key issuance blocked
+LOW_QBER_THRESHOLD = 0.05
+SECURE_QBER_THRESHOLD = 0.11
 
 
 @dataclass
-class Session:
-    """A paired key exchange session between two devices."""
+class SessionRecord:
     session_id: str
-    initiator: str
-    peer: str
     key: bytes
     qber: float
-    status: LinkStatus
-    created_at: datetime
-    joined: bool = False          # True once the peer has retrieved the key
-    messages_encrypted: int = 0
-    pqc_enabled: bool = False
+    status: str
+    clients: Set[str]
+    created_at: float
+    compromised: bool
+    use_hybrid: bool
+    pqc_secret: Optional[bytes]
+    is_control: bool = False
 
-
-@dataclass
-class KMSMetrics:
-    """KMS operational metrics for monitoring."""
-    total_keys_issued: int = 0
-    total_sessions: int = 0
-    attacks_detected: int = 0
-    active_sessions: int = 0
-    last_qber: float = 0.0
-    link_status: LinkStatus = LinkStatus.GREEN
-    qber_history: list = field(default_factory=list)
-
-
-# =============================================================================
-# KEY MANAGEMENT SERVICE
-# =============================================================================
 
 class KeyManagementService:
-    """
-    Central Key Management Service for QSTCS.
+    def __init__(
+        self,
+        port_pool: Optional[list[int]] = None,
+        ip_pool: Optional[list[str]] = None,
+        network_pool: Optional[list[str]] = None,
+    ) -> None:
+        self.sessions: Dict[str, SessionRecord] = {}
+        self.eve_mode: bool = False
+        self.attacks_detected: int = 0
+        self.total_sessions: int = 0
 
-    Handles all key generation, derivation, and distribution for the
-    tactical communication network. Keys are managed per session —
-    each session pairs exactly two devices.
+        self.last_qber: float = 0.0
+        self.last_status: str = "GREEN"
+        self.last_attack_detected: bool = False
 
-    Thread Safety:
-        All operations are thread-safe using internal locks.
+        self.escalation_level: int = 1
 
-    Usage:
-        >>> kms = KeyManagementService()
-        >>> session = kms.create_session("Alpha", "Bravo")
-        >>> key_a = session['key']
-        >>> key_b = kms.join_session(session['session_id'], "Bravo")['key']
-        >>> assert key_a == key_b
-    """
+        self.port_pool = port_pool or [1919, 1920, 1921, 1922, 1923, 1924, 1925]
+        self.ip_pool = ip_pool or ["192.168.1.100", "192.168.1.150"]
+        self.network_pool = network_pool or ["192.168.1.0/24", "192.168.2.0/24"]
 
-    def __init__(self, qber_threshold: float = QBER_SECURITY_THRESHOLD):
+        self.current_port = self.port_pool[0]
+        self.current_ip = self.ip_pool[0]
+        self.current_network = self.network_pool[0]
+
+        self.burned_ports: Set[int] = set()
+        self.burned_ips: Set[str] = set()
+        self.burned_networks: Set[str] = set()
+
         self._lock = threading.Lock()
-        self._sessions: Dict[str, Session] = {}          # session_id → Session
-        self._pair_index: Dict[frozenset, str] = {}       # {dev_a, dev_b} → session_id
-        self._metrics = KMSMetrics()
-        self._qber_threshold = qber_threshold
-        self._eve_active = False  # Global Eve toggle for live attack simulation
 
-        print(f"[KMS] Key Management Service initialized")
-        print(f"[KMS] QBER security threshold: {qber_threshold:.1%}")
+    def _status_from_qber(self, qber: float, attack_detected: bool) -> str:
+        if attack_detected or qber >= SECURE_QBER_THRESHOLD:
+            return "RED"
+        if qber < LOW_QBER_THRESHOLD:
+            return "GREEN"
+        return "YELLOW"
 
-    # =========================================================================
-    # SESSION-BASED KEY EXCHANGE
-    # =========================================================================
+    def _derive_aes_key(self, raw_key: bytes, pqc_secret: Optional[bytes]) -> bytes:
+        material = raw_key + (pqc_secret or b"")
+        hkdf = HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=None,
+            info=b"bb84-demo-aes-key",
+        )
+        return hkdf.derive(material)
 
-    def create_session(
-        self,
-        initiator: str,
-        peer: str,
-        num_bits: int = 512,
-        pqc_enabled: bool = False,
-    ) -> Dict[str, Any]:
-        """
-        Create a new key exchange session between two devices.
+    def _next_available(self, pool: list, burned: Set) -> Optional:
+        for item in pool:
+            if item not in burned:
+                return item
+        return None
 
-        Runs BB84 QKD simulation, validates QBER, derives an AES-256 key
-        via HKDF-SHA256, and stores it in a session bound to (initiator, peer).
+    def _update_escalation(self, status: str) -> None:
+        if status != "RED":
+            return
 
-        Args:
-            initiator: Device ID of the session creator
-            peer: Device ID of the intended communication partner
-            num_bits: Number of qubits for BB84 (default: 512)
-            pqc_enabled: If True, apply hybrid PQC key derivation
+        if self.escalation_level == 1:
+            self.burned_ports.add(self.current_port)
+            next_port = self._next_available(self.port_pool, self.burned_ports)
+            if next_port is not None:
+                self.current_port = next_port
+                return
 
-        Returns:
-            Dict with session_id, key (bytes), qber, status
+            self.escalation_level = 2
+            self.burned_ports.clear()
+            self.current_port = self.port_pool[0]
+            return
 
-        Raises:
-            Exception: If QBER exceeds threshold (attack detected)
-            ValueError: If session already exists for this pair
-        """
+        if self.escalation_level == 2:
+            self.burned_ips.add(self.current_ip)
+            next_ip = self._next_available(self.ip_pool, self.burned_ips)
+            if next_ip is not None:
+                self.current_ip = next_ip
+                return
+
+            self.escalation_level = 3
+            self.burned_ips.clear()
+            self.current_ip = self.ip_pool[0]
+            return
+
+        if self.escalation_level == 3:
+            self.burned_networks.add(self.current_network)
+            next_net = self._next_available(self.network_pool, self.burned_networks)
+            if next_net is not None:
+                self.current_network = next_net
+                return
+
+            self.escalation_level = 4
+
+    def create_session(self, client_a: str, client_b: str, use_hybrid: bool) -> Dict[str, object]:
+        session_id = uuid.uuid4().hex
+        bb84 = run_bb84_session(session_id, num_bits=256, eve=self.eve_mode, rng_seed=None)
+
+        raw_key: bytes = bb84["raw_key"]
+        qber: float = float(bb84["qber"])
+        attack_detected: bool = bool(bb84["attack_detected"])
+
+        pqc_secret = os.urandom(32) if use_hybrid else None
+        aes_key = self._derive_aes_key(raw_key, pqc_secret)
+        status = self._status_from_qber(qber, attack_detected)
+
+        record = SessionRecord(
+            session_id=session_id,
+            key=aes_key,
+            qber=qber,
+            status=status,
+            clients={client_a, client_b},
+            created_at=time.time(),
+            compromised=status == "RED",
+            use_hybrid=use_hybrid,
+            pqc_secret=pqc_secret,
+            is_control=False,
+        )
+
         with self._lock:
-            pair_key = frozenset({initiator, peer})
+            self.sessions[session_id] = record
+            self.total_sessions += 1
+            if attack_detected or status == "RED":
+                self.attacks_detected += 1
 
-            # Check if an active session already exists for this pair
-            if pair_key in self._pair_index:
-                existing_id = self._pair_index[pair_key]
-                existing = self._sessions[existing_id]
-                # Return existing session if peer hasn't joined yet
-                if not existing.joined:
-                    print(f"[KMS] Session {existing_id[:8]}... already exists "
-                          f"for ({initiator}, {peer})")
-                    return self._session_to_dict(existing)
+            self.last_qber = qber
+            self.last_status = status
+            self.last_attack_detected = attack_detected
 
-            # Determine if Eve is active (global toggle or channel noise)
-            eve_present = self._eve_active
+            self._update_escalation(status)
 
-            # ---- PHASE 1: BB84 Quantum Key Distribution ----
-            print(f"\n[KMS] Creating session: {initiator} ↔ {peer}")
-            print(f"[KMS] Executing BB84 protocol ({num_bits} qubits)...")
-
-            raw_key, qber, attack_detected = simulate_bb84(
-                num_bits=num_bits,
-                eve_present=eve_present,
-                eve_intercept_rate=1.0 if eve_present else 0.0
-            )
-
-            self._metrics.last_qber = qber
-            self._metrics.qber_history.append({
-                "timestamp": datetime.now().isoformat(),
-                "qber": qber,
-                "eve_present": eve_present,
-            })
-            print(f"[KMS] BB84 complete. QBER = {qber:.2%}")
-
-            # ---- PHASE 2: Security Validation ----
-            if attack_detected or qber > self._qber_threshold:
-                self._metrics.link_status = LinkStatus.RED
-                self._metrics.attacks_detected += 1
-                print(f"[KMS] ⚠️  ATTACK DETECTED! QBER = {qber:.2%}")
-                print(f"[KMS] Key issuance BLOCKED. Link status: RED")
-                raise Exception(
-                    f"QKD link compromised! QBER={qber:.1%} exceeds "
-                    f"{self._qber_threshold:.0%} threshold. "
-                    f"Session for {initiator} ↔ {peer} aborted."
-                )
-
-            # Update link status
-            if qber < 0.05:
-                self._metrics.link_status = LinkStatus.GREEN
-            elif qber < self._qber_threshold:
-                self._metrics.link_status = LinkStatus.YELLOW
-
-            # ---- PHASE 3: Key Derivation (HKDF-SHA256) ----
-            session_id = uuid.uuid4().hex[:16]
-            info_str = f"QSTCS-Session-{session_id}-{initiator}-{peer}"
-
-            hkdf = HKDF(
-                algorithm=hashes.SHA256(),
-                length=32,
-                salt=None,
-                info=info_str.encode(),
-                backend=default_backend()
-            )
-            session_key = hkdf.derive(raw_key)
-
-            # ---- PHASE 3b: Hybrid PQC (optional) ----
-            if pqc_enabled:
-                kyber_shared_secret = os.urandom(32)
-                hybrid_input = session_key + kyber_shared_secret
-
-                hybrid_hkdf = HKDF(
-                    algorithm=hashes.SHA256(),
-                    length=32,
-                    salt=None,
-                    info=b"QSTCS-Hybrid-PQC",
-                    backend=default_backend()
-                )
-                session_key = hybrid_hkdf.derive(hybrid_input)
-                print(f"[KMS] 🧬 Hybrid PQC derivation applied")
-
-            # ---- PHASE 4: Store Session ----
-            session = Session(
-                session_id=session_id,
-                initiator=initiator,
-                peer=peer,
-                key=session_key,
-                qber=qber,
-                status=self._metrics.link_status,
-                created_at=datetime.now(),
-                pqc_enabled=pqc_enabled,
-            )
-
-            self._sessions[session_id] = session
-            self._pair_index[pair_key] = session_id
-            self._metrics.total_sessions += 1
-            self._metrics.total_keys_issued += 1
-            self._metrics.active_sessions = sum(
-                1 for s in self._sessions.values() if s.status != LinkStatus.RED
-            )
-
-            print(f"[KMS] ✓ Session {session_id} created")
-            print(f"[KMS]   {initiator} ↔ {peer} | QBER={qber:.2%}")
-            print(f"[KMS]   Key: {session_key.hex()[:32]}...")
-
-            return self._session_to_dict(session)
-
-    def join_session(self, session_id: str, device_id: str) -> Dict[str, Any]:
-        """
-        Join an existing session and retrieve the shared key.
-
-        The peer device calls this to get the same key that was generated
-        when the session was created.
-
-        Args:
-            session_id: The session ID returned by create_session
-            device_id: Device ID of the joining party
-
-        Returns:
-            Dict with key (bytes), qber, status
-
-        Raises:
-            ValueError: If session not found or device is not the expected peer
-        """
-        with self._lock:
-            if session_id not in self._sessions:
-                raise ValueError(f"Session {session_id} not found")
-
-            session = self._sessions[session_id]
-
-            # Validate the device is the expected peer (or the initiator re-fetching)
-            if device_id != session.peer and device_id != session.initiator:
-                raise ValueError(
-                    f"Device '{device_id}' is not a participant in session {session_id}. "
-                    f"Expected '{session.initiator}' or '{session.peer}'."
-                )
-
-            if session.status == LinkStatus.RED:
-                raise Exception(
-                    f"Session {session_id} was invalidated due to quantum link compromise"
-                )
-
-            session.joined = True
-            self._metrics.total_keys_issued += 1
-
-            print(f"[KMS] ✓ '{device_id}' joined session {session_id}")
-            return self._session_to_dict(session)
-
-    def get_session_by_pair(self, device_a: str, device_b: str) -> Optional[Dict[str, Any]]:
-        """Look up the active session between two devices."""
-        with self._lock:
-            pair_key = frozenset({device_a, device_b})
-            if pair_key in self._pair_index:
-                session_id = self._pair_index[pair_key]
-                session = self._sessions[session_id]
-                if session.status != LinkStatus.RED:
-                    return self._session_to_dict(session)
-            return None
-
-    # =========================================================================
-    # BACKWARD COMPATIBILITY — get_fresh_key (used by main.py, tests)
-    # =========================================================================
-
-    def get_fresh_key(
-        self,
-        device_id: str,
-        force_eve_attack: bool = False,
-        num_bits: int = 512,
-        pqc_enabled: bool = False,
-        peer_id: str = "_broadcast_"
-    ) -> bytes:
-        """
-        Legacy interface: generate a key for a device.
-
-        For backward compatibility with main.py and tests. Internally
-        creates or joins a session with the given peer_id.
-        """
-        # Temporarily enable Eve if forced
-        old_eve = self._eve_active
-        if force_eve_attack:
-            self._eve_active = True
-
-        try:
-            # Check if a session exists that this device can join
-            pair_key = frozenset({device_id, peer_id})
-            with self._lock:
-                if pair_key in self._pair_index:
-                    sid = self._pair_index[pair_key]
-                    session = self._sessions[sid]
-                    if not session.joined and device_id == session.peer:
-                        session.joined = True
-                        self._metrics.total_keys_issued += 1
-                        print(f"[KMS] ✓ '{device_id}' joined existing session {sid}")
-                        return session.key
-
-            # Create new session
-            result = self.create_session(
-                initiator=device_id,
-                peer=peer_id,
-                num_bits=num_bits,
-                pqc_enabled=pqc_enabled,
-            )
-            return result['key']
-
-        finally:
-            self._eve_active = old_eve
-
-    # =========================================================================
-    # EVE / ATTACK CONTROL
-    # =========================================================================
-
-    def activate_eve(self) -> None:
-        """Activate the eavesdropper on the quantum channel."""
-        with self._lock:
-            self._eve_active = True
-            print("[KMS] ⚠️  Eve is now ACTIVE on the quantum channel")
-
-    def deactivate_eve(self) -> None:
-        """Deactivate the eavesdropper."""
-        with self._lock:
-            self._eve_active = False
-            print("[KMS] ✓ Eve deactivated")
-
-    @property
-    def eve_active(self) -> bool:
-        return self._eve_active
-
-    def trigger_attack(self) -> Dict[str, Any]:
-        """
-        Run a BB84 exchange with Eve active to flip link status to RED.
-
-        Returns the resulting QBER and status.
-        """
-        self._eve_active = True
-        try:
-            self.create_session(
-                initiator="_attack_probe_",
-                peer="_attack_target_",
-                num_bits=512,
-            )
-            # Shouldn't reach here
-            health = self.check_link_health()
-            return {"status": health["status"], "qber": health["last_qber"]}
-        except Exception:
-            health = self.check_link_health()
-            return {
-                "status": health["status"],
-                "qber": health["last_qber"],
-                "attacks_detected": health["attacks_detected"],
-            }
-
-    # =========================================================================
-    # MONITORING
-    # =========================================================================
-
-    def check_link_health(self) -> Dict[str, Any]:
-        """Get current link health status and metrics."""
-        with self._lock:
-            return {
-                'status': self._metrics.link_status.value,
-                'total_keys_issued': self._metrics.total_keys_issued,
-                'total_sessions': self._metrics.total_sessions,
-                'attacks_detected': self._metrics.attacks_detected,
-                'active_sessions': self._metrics.active_sessions,
-                'last_qber': self._metrics.last_qber,
-                'eve_active': self._eve_active,
-                'qber_history': list(self._metrics.qber_history[-20:]),
-            }
-
-    def list_sessions(self) -> list:
-        """List all active sessions (no key material exposed)."""
-        with self._lock:
-            return [
-                {
-                    "session_id": s.session_id,
-                    "initiator": s.initiator,
-                    "peer": s.peer,
-                    "qber": s.qber,
-                    "status": s.status.value,
-                    "joined": s.joined,
-                    "created_at": s.created_at.isoformat(),
-                    "pqc_enabled": s.pqc_enabled,
-                }
-                for s in self._sessions.values()
-            ]
-
-    def invalidate_session(self, session_id: str) -> bool:
-        """Invalidate a session and revoke its key."""
-        with self._lock:
-            if session_id in self._sessions:
-                session = self._sessions[session_id]
-                session.status = LinkStatus.RED
-                # Remove from pair index
-                pair_key = frozenset({session.initiator, session.peer})
-                self._pair_index.pop(pair_key, None)
-                del self._sessions[session_id]
-                self._metrics.active_sessions = sum(
-                    1 for s in self._sessions.values() if s.status != LinkStatus.RED
-                )
-                print(f"[KMS] Session {session_id} invalidated")
-                return True
-            return False
-
-    def reset(self) -> None:
-        """Reset all KMS state."""
-        with self._lock:
-            self._sessions.clear()
-            self._pair_index.clear()
-            self._metrics = KMSMetrics()
-            self._eve_active = False
-            print("[KMS] All state cleared")
-
-    # Legacy alias
-    def reset_for_demo(self) -> None:
-        self.reset()
-
-    # =========================================================================
-    # INTERNALS
-    # =========================================================================
-
-    def _session_to_dict(self, session: Session) -> Dict[str, Any]:
-        """Convert a Session to a response dict."""
         return {
-            "session_id": session.session_id,
-            "key": session.key,
-            "key_hex": session.key.hex(),
-            "qber": session.qber,
-            "status": session.status.value,
-            "initiator": session.initiator,
-            "peer": session.peer,
-            "joined": session.joined,
-            "pqc_enabled": session.pqc_enabled,
+            "session_id": session_id,
+            "status": status,
+            "qber": qber,
+            "attack_detected": attack_detected,
+            "use_hybrid": use_hybrid,
         }
 
+    def get_key(self, session_id: str, client_id: str) -> Dict[str, object]:
+        with self._lock:
+            record = self.sessions.get(session_id)
+            if record is None:
+                raise KeyError("unknown session")
+            if client_id not in record.clients:
+                raise PermissionError("client not in session")
+            aes_key = record.key
 
-# =============================================================================
-# STANDALONE TEST
-# =============================================================================
+        return {
+            "session_id": session_id,
+            "client_id": client_id,
+            "aes_key_b64": base64.b64encode(aes_key).decode("ascii"),
+            "algorithm": "AES-256-GCM",
+        }
 
-if __name__ == "__main__":
-    print("=" * 60)
-    print("Key Management Service — Verification")
-    print("=" * 60)
+    def get_link_status(self) -> Dict[str, object]:
+        with self._lock:
+            active_sessions = sum(1 for s in self.sessions.values() if not s.is_control)
+            status = self.last_status
+            qber = self.last_qber
+            attack_count = self.attacks_detected
+            eve_mode = self.eve_mode
+            escalation_level = self.escalation_level
 
-    kms = KeyManagementService()
+            label = {
+                1: "SAFE",
+                2: "TACTICAL RETREAT",
+                3: "EMERGENCY",
+                4: "LOCKDOWN",
+            }.get(escalation_level, "SAFE")
 
-    # Test 1: Create session
-    print("\n[TEST 1] Create session Alpha ↔ Bravo")
-    print("-" * 40)
-    session = kms.create_session("Alpha", "Bravo")
-    print(f"  Session ID: {session['session_id']}")
-    print(f"  Key (hex): {session['key_hex'][:32]}...")
-    print(f"  QBER: {session['qber']:.2%}")
-    print(f"  Status: {session['status']}")
+            return {
+                "status": status,
+                "qber": qber,
+                "attacks_detected": attack_count,
+                "active_sessions": active_sessions,
+                "eve_mode": eve_mode,
+                "escalation_level": escalation_level,
+                "escalation_label": label,
+                "current_port": self.current_port,
+                "current_ip": self.current_ip,
+                "current_network": self.current_network,
+            }
 
-    # Test 2: Peer joins
-    print("\n[TEST 2] Bravo joins session")
-    print("-" * 40)
-    joined = kms.join_session(session['session_id'], "Bravo")
-    print(f"  Keys match: {session['key'] == joined['key']}")
-    print(f"  Joined: {joined['joined']}")
+    def set_eve_mode(self, on: bool) -> None:
+        with self._lock:
+            self.eve_mode = on
 
-    # Test 3: Attack detection
-    print("\n[TEST 3] Attack detection")
-    print("-" * 40)
-    result = kms.trigger_attack()
-    print(f"  Status: {result['status']}")
-    print(f"  QBER: {result['qber']:.2%}")
-    print(f"  Attacks: {result['attacks_detected']}")
+    def trigger_attack(self) -> Dict[str, object]:
+        session_id = f"attack-{uuid.uuid4().hex[:8]}"
+        bb84 = run_bb84_session(session_id, num_bits=256, eve=True, rng_seed=None)
 
-    # Test 4: Health
-    print("\n[TEST 4] Link health")
-    print("-" * 40)
-    health = kms.check_link_health()
-    for k, v in health.items():
-        if k != 'qber_history':
-            print(f"  {k}: {v}")
+        qber: float = float(bb84["qber"])
+        attack_detected: bool = bool(bb84["attack_detected"])
+        if not attack_detected:
+            qber = SECURE_QBER_THRESHOLD
+            attack_detected = True
+
+        aes_key = self._derive_aes_key(os.urandom(32), None)
+        record = SessionRecord(
+            session_id=session_id,
+            key=aes_key,
+            qber=qber,
+            status="RED",
+            clients={"system"},
+            created_at=time.time(),
+            compromised=True,
+            use_hybrid=False,
+            pqc_secret=None,
+            is_control=True,
+        )
+
+        with self._lock:
+            self.sessions[session_id] = record
+            self.attacks_detected += 1
+            self.last_qber = qber
+            self.last_status = "RED"
+            self.last_attack_detected = True
+            self._update_escalation("RED")
+
+        return {
+            "session_id": session_id,
+            "status": "RED",
+            "qber": qber,
+            "attack_detected": True,
+        }
