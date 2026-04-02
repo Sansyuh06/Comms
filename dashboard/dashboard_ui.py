@@ -25,7 +25,7 @@ except ImportError:
     st.error("Missing dependency: pip install httpx")
     st.stop()
 
-from quantum_engine.bb84_simulator import simulate_bb84, QBER_SECURITY_THRESHOLD
+from quantum_engine.bb84_simulator import simulate_bb84, QBER_SECURITY_THRESHOLD  # noqa — these now exist
 
 
 # =============================================================================

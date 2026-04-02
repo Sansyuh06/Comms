@@ -97,6 +97,17 @@ class ChatGUI:
 
     def _auto_discover_server(self):
         import socket
+        
+        def _get_local_ip() -> str:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(('8.8.8.8', 80))
+                ip = s.getsockname()[0]
+                s.close()
+                return ip
+            except Exception:
+                return '127.0.0.1'
+
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
@@ -121,6 +132,9 @@ class ChatGUI:
                         server_ip = addr[0]
                     else:
                         continue
+                        
+                    if server_ip == _get_local_ip():
+                        server_ip = "127.0.0.1"
                         
                     new_kms = f"http://{server_ip}:{kms_port}"
                     new_ws = f"ws://{server_ip}:{ws_port}"

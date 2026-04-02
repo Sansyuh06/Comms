@@ -29,7 +29,9 @@ class GetKeyRequest(BaseModel):
 
 @app.post("/create_session")
 def create_session(req: CreateSessionRequest):
-    return kms.create_session(req.client_a, req.client_b, req.use_hybrid)
+    res = kms.create_session(req.client_a, req.client_b, req.use_hybrid)
+    res.pop("key", None)
+    return res
 
 
 @app.post("/get_key")

@@ -1,17 +1,15 @@
 """
 Lightweight BB84-style QKD simulator.
-
-This module provides a deterministic-enough BB84 simulation for demo use.
-It models basis choice, sifting, and disturbance from intercept-resend (Eve).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Dict
+from typing import List, Dict, Tuple
 import random
 
 QBER_THRESHOLD = 0.11
+QBER_SECURITY_THRESHOLD = 0.11   # alias used by tests and dashboard
 DEFAULT_NOISE_RATE = 0.01
 
 
@@ -43,15 +41,16 @@ def run_bb84_session(
     num_bits: int = 256,
     eve: bool = False,
     rng_seed: int | None = None,
+    eve_intercept_rate: float = 1.0,
 ) -> Dict[str, object]:
     """
     Simulates one BB84 key exchange.
     Returns:
     {
       "session_id": str,
-      "raw_key": bytes,       # agreed bits -> bytes
-      "qber": float,          # 0.0-1.0
-      "attack_detected": bool # qber >= threshold
+      "raw_key": bytes,
+      "qber": float,
+      "attack_detected": bool
     }
     """
 
@@ -67,7 +66,7 @@ def run_bb84_session(
         alice_bit = alice_bits[i]
         alice_basis = alice_bases[i]
 
-        if eve:
+        if eve and rng.random() < eve_intercept_rate:
             eve_basis = rng.randint(0, 1)
             if eve_basis == alice_basis:
                 eve_bit = alice_bit
@@ -122,6 +121,42 @@ def run_bb84_session(
         "qber": result.qber,
         "attack_detected": result.attack_detected,
     }
+
+
+def simulate_bb84(
+    num_bits: int = 512,
+    eve_present: bool = False,
+    eve_intercept_rate: float = 1.0,
+) -> Tuple[bytes, float, bool]:
+    """
+    Compatibility alias used by tests and dashboard.
+    Returns (key_bytes_32, qber, attack_detected).
+    Always returns exactly 32 bytes by padding or truncating via HKDF.
+    """
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cryptography.hazmat.primitives import hashes
+
+    result = run_bb84_session(
+        session_id="sim",
+        num_bits=num_bits,
+        eve=eve_present,
+        rng_seed=None,
+        eve_intercept_rate=eve_intercept_rate,
+    )
+
+    raw = result["raw_key"]
+    if not raw:
+        raw = b"\x00" * 32
+
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=b"bb84-simulate-compat",
+    )
+    key_32 = hkdf.derive(raw)
+
+    return key_32, result["qber"], result["attack_detected"]
 
 
 if __name__ == "__main__":

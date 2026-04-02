@@ -82,7 +82,7 @@ async def chat_loop(user_id: str, peer_id: str, session_id: str, aes_key: bytes,
                         if status:
                             print(
                                 f"[link] {status['status']} qber={status['qber']:.3f} "
-                                f"eve={status['eve_mode']} level={status['escalation_level']}"
+                                f"eve={status.get('eve_mode') or status.get('eve_active', False)} level={status['escalation_level']}"
                             )
                         continue
 

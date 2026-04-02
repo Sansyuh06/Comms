@@ -1,0 +1,121 @@
+===========================
+================
+FAIL: 
+test_partial_interception (
+test_system.TestBB84Simulat
+or.test_partial_interceptio
+n)
+Test partial eavesdropping 
+produces intermediate QBER.
+---------------------------
+---------------------------
+----------------
+Traceback (most recent 
+call last):
+  File "D:\fyeshi\project\q
+uantum\Coms\tests\test_syst
+em.py", line 78, in 
+test_partial_interception
+    self.assertLess(qber, 
+0.20)
+    
+~~~~~~~~~~~~~~~^^^^^^^^^^^^
+AssertionError: 
+0.2495049504950495 not 
+less than 0.2
+
+---------------------------
+---------------------------
+----------------
+Ran 21 tests in 0.010s
+
+FAILED (failures=1)
+============================================================
+  QSTCS End-to-End Verification
+============================================================
+
+[1] Alpha creates session with Bravo
+    Session: 2ade46833f8d43d29483b79c25cf28c2
+    QBER: 0.00%
+    Key (Alpha): 3045cd5a06bb2f2c0d2358e2...
+
+[2] Bravo joins session
+    Key (Bravo): 3045cd5a06bb2f2c0d2358e2...
+    Keys identical: True
+
+[3] Alpha encrypts a message
+    Plaintext:  Grid ref 842156 ΓÇö 2x armored vehicles moving east....
+    Ciphertext: 41eb64f8ea316ebf6822ebaac4c58ba02050f841406c5adf...
+    Nonce:      0d55cc31e189954321c8f1e5
+
+[4] Bravo decrypts with same key
+    Decrypted:  Grid ref 842156 ΓÇö 2x armored vehicles moving east....
+    Match: True
+
+[5] Eve activates on quantum channel
+    Status: RED
+    QBER:   22.22%
+    Attacks detected: 1
+
+[6] Link health
+    Status: RED
+    Sessions: 1
+    Keys issued: 1
+    Eve active: False
+
+[7] Reset
+    Status after reset: GREEN
+
+============================================================
+  ALL CHECKS PASSED Γ£ô
+============================================================
+[Soldier_A] Device initialized
+[Soldier_B] Device initialized
+[Soldier_A] Requesting key from KMS...
+[Soldier_A] Γ£ô Key established
+[Device] Device initialized
+[Device] Requesting key from KMS...
+[Device] Γ¥î Key request failed: Quantum channel compromised ΓÇö QBER=26.02%. Key not issued.
+[Sender] Device initialized
+[Receiver] Device initialized
+[Sender] Requesting key from KMS...
+[Sender] Γ£ô Key established
+[Receiver] Requesting key from KMS...
+[Receiver] Γ£ô Key established
+[Sender] Γ£ô Encrypted message for 'Receiver'
+[Sender]   Plaintext:  'This is a secret tactical message.'
+[Sender]   Ciphertext: 4ebc615351754eb17d5209df0269b2d0...
+[Receiver] Γ£ô Message from 'Sender' verified
+[Receiver]   Plaintext: 'This is a secret tactical message.'
+[Sender] Device initialized
+[Receiver] Device initialized
+[Sender] Requesting key from KMS...
+[Sender] Γ£ô Key established
+[Receiver] Requesting key from KMS...
+[Receiver] Γ£ô Key established
+[Sender] Γ£ô Encrypted message for 'Receiver'
+[Sender]   Plaintext:  'First message'
+[Sender]   Ciphertext: 5f781a852d3643c1b638ebae9dadf6c3...
+[Receiver] Γ£ô Message from 'Sender' verified
+[Receiver]   Plaintext: 'First message'
+[Sender] Γ£ô Encrypted message for 'Receiver'
+[Sender]   Plaintext:  'Second message with more content'
+[Sender]   Ciphertext: 8534847a99b18c9e14e1f28f086350d9...
+[Receiver] Γ£ô Message from 'Sender' verified
+[Receiver]   Plaintext: 'Second message with more content'
+[Sender] Γ£ô Encrypted message for 'Receiver'
+[Sender]   Plaintext:  'Third message'
+[Sender]   Ciphertext: 8ea13e9551b1fce33bd5a9ff99863f9a...
+[Receiver] Γ£ô Message from 'Sender' verified
+[Receiver]   Plaintext: 'Third message'
+[TestSoldier] Device initialized
+[TestSoldier] Requesting key from KMS...
+[TestSoldier] Γ£ô Key established
+[TestSoldier] Γ£ô Encrypted message for 'Recipient'
+[TestSoldier]   Plaintext:  'Test message'
+[TestSoldier]   Ciphertext: dd021d7bc108697489e8aee3d9353335...
+[TestSoldier] Device initialized
+[TestSoldier] Γ¥î No key available. Call request_key() first.
+[TestSoldier] Device initialized
+[TestSoldier] Requesting key from KMS...
+[TestSoldier] Γ£ô Key established

@@ -4,7 +4,7 @@ Start all core services for the quantum-aware secure chat demo.
 This launches:
 - KMS API server
 - WebSocket chat relay
-- Optional GUI clients (default: 2)
+- Optional GUI clients (default: 2) 
 
 Router guard is still run separately on a Linux/OpenWrt box.
 """
@@ -107,34 +107,33 @@ def main() -> int:
         if not server_exists:
             print("[*] No existing server found. Hosting a new Quantum Chat server...")
             procs.append(
-            _launch(
-                [
-                    python,
-                    "-m",
-                    "kms.kms_server",
-                    "--host",
-                    args.kms_host,
-                    "--port",
-                    str(args.kms_port),
-                ]
+                _launch(
+                    [
+                        python,
+                        "-m",
+                        "kms.kms_server",
+                        "--host",
+                        args.kms_host,
+                        "--port",
+                        str(args.kms_port),
+                    ]
+                )
             )
-        )
 
-        procs.append(
-            _launch(
-                [
-                    python,
-                    "-m",
-                    "chat.chat_server",
-                    "--host",
-                    args.chat_host,
-                    "--port",
-                    str(args.chat_port),
-                ]
+            procs.append(
+                _launch(
+                    [
+                        python,
+                        "-m",
+                        "chat.chat_server",
+                        "--host",
+                        args.chat_host,
+                        "--port",
+                        str(args.chat_port),
+                    ]
+                )
             )
-        )
 
-        if not server_exists:
             _broadcast_presence(args.kms_port, args.chat_port)
             print("Services launched.")
             print("KMS UI: http://<your_kms_ip>:8000/")
@@ -147,6 +146,11 @@ def main() -> int:
 
         while True:
             time.sleep(1)
+            # If we are the host, check if the critical servers crashed!
+            if not server_exists and len(procs) >= 2:
+                if procs[0].poll() is not None or procs[1].poll() is not None:
+                    print("Error: A backend server crashed! Stopping everything...")
+                    break
 
     except KeyboardInterrupt:
         print("Stopping...")

@@ -19,7 +19,12 @@ class ChatServer:
     def __init__(self) -> None:
         self.clients: Dict[str, websockets.WebSocketServerProtocol] = {}
 
-    async def handler(self, websocket: websockets.WebSocketServerProtocol, path: str):
+    async def handler(self, websocket: websockets.WebSocketServerProtocol, *args):
+        try:
+            path = args[0] if args else websocket.request.path
+        except AttributeError:
+            path = getattr(websocket, 'path', '/')
+            
         user_id = self._user_id_from_path(path)
         if not user_id:
             user_id = await self._read_hello(websocket)

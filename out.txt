@@ -1,0 +1,268 @@
+...E.E...F.EEE.....EEE
+======================================================================
+ERROR: test_e2e (unittest.loader._FailedTest.test_e2e)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_e2e
+Traceback (most recent call last):
+  File "C:\Users\Akash Santhnu Sundar\AppData\Local\Programs\Python\Python314\Lib\unittest\loader.py", line 426, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "C:\Users\Akash Santhnu Sundar\AppData\Local\Programs\Python\Python314\Lib\unittest\loader.py", line 367, in _get_module_from_name
+    __import__(name)
+    ~~~~~~~~~~^^^^^^
+  File "D:\fyeshi\project\quantum\Coms\tests\test_e2e.py", line 69, in <module>
+    print("  ALL CHECKS PASSED \u2713")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Akash Santhnu Sundar\AppData\Local\Programs\Python\Python314\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 20: character maps to <undefined>
+
+
+======================================================================
+ERROR: test_end_to_end_flow (test_kms_devices.TestKMSDevices.test_end_to_end_flow)
+Test authentication, key generation, and message exchange.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\fyeshi\project\quantum\Coms\devices\client.py", line 138, in request_key
+    print(f"[{self.device_id}] \u2713 Key established")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Akash Santhnu Sundar\AppData\Local\Programs\Python\Python314\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 12: character maps to <undefined>
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\fyeshi\project\quantum\Coms\tests\test_kms_devices.py", line 20, in test_end_to_end_flow
+    success_a = soldier_a.request_key()
+  File "D:\fyeshi\project\quantum\Coms\devices\client.py", line 141, in request_key
+    print(f"[{self.device_id}] \u274c Key request failed: {e}")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Akash Santhnu Sundar\AppData\Local\Programs\Python\Python314\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u274c' in position 12: character maps to <undefined>
+
+======================================================================
+ERROR: test_attack_prevents_communication (test_system.TestEndToEndFlow.test_attack_prevents_communication)
+Test that attack detection prevents message exchange.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\fyeshi\project\quantum\Coms\devices\client.py", line 134, in request_key
+    self._current_key = self._kms.get_fresh_key(
+                        ~~~~~~~~~~~~~~~~~~~~~~~^
+        self.device_id,
+        ^^^^^^^^^^^^^^^
+        force_eve_attack=force_attack
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "D:\fyeshi\project\quantum\Coms\kms\key_management_service.py", line 292, in get_fresh_key
+    raise Exception(
+        f"Quantum channel compromised — QBER={qber:.2%}. Key not issued."
+    )
+Exception: Quantum channel compromised — QBER=24.29%. Key not issued.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\fyeshi\project\quantum\Coms\tests\test_system.py", line 223, in test_attack_prevents_communication
+    result = device.request_key(force_attack=True)
+  File "D:\fyeshi\project\quantum\Coms\devices\client.py", line 141, in request_key
+    print(f"[{self.device_id}] \u274c Key request failed: {e}")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Akash Santhnu Sundar\AppData\Local\Programs\Python\Python314\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u274c' in position 9: character maps to <undefined>
+
+======================================================================
+ERROR: test_full_message_exchange (test_system.TestEndToEndFlow.test_full_message_exchange)
+Test complete message exchange between two devices.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\fyeshi\project\quantum\Coms\devices\client.py", line 138, in request_key
+    print(f"[{self.device_id}] \u2713 Key established")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Akash Santhnu Sundar\AppData\Local\Programs\Python\Python314\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 9: character maps to <undefined>
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\fyeshi\project\quantum\Coms\tests\test_system.py", line 203, in test_full_message_exchange
+    self.assertTrue(sender.request_key())
+                    ~~~~~~~~~~~~~~~~~~^^
+  File "D:\fyeshi\project\quantum\Coms\devices\client.py", line 141, in request_key
+    print(f"[{self.device_id}] \u274c Key request failed: {e}")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Akash Santhnu Sundar\AppData\Local\Programs\Python\Python314\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u274c' in position 9: character maps to <undefined>
+
+======================================================================
+ERROR: test_multiple_messages (test_system.TestEndToEndFlow.test_multiple_messages)
+Test sending multiple messages with same key.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\fyeshi\project\quantum\Coms\devices\client.py", line 138, in request_key
+    print(f"[{self.device_id}] \u2713 Key established")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Akash Santhnu Sundar\AppData\Local\Programs\Python\Python314\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 9: character maps to <undefined>
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\fyeshi\project\quantum\Coms\tests\test_system.py", line 235, in test_multiple_messages
+    sender.request_key()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "D:\fyeshi\project\quantum\Coms\devices\client.py", line 141, in request_key
+    print(f"[{self.device_id}] \u274c Key request failed: {e}")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Akash Santhnu Sundar\AppData\Local\Programs\Python\Python314\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u274c' in position 9: character maps to <undefined>
+
+======================================================================
+ERROR: test_encryption_with_key (test_system.TestSoldierDevice.test_encryption_with_key)
+Test message encryption with valid key.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\fyeshi\project\quantum\Coms\devices\client.py", line 138, in request_key
+    print(f"[{self.device_id}] \u2713 Key established")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Akash Santhnu Sundar\AppData\Local\Programs\Python\Python314\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 14: character maps to <undefined>
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\fyeshi\project\quantum\Coms\tests\test_system.py", line 178, in test_encryption_with_key
+    self.device.request_key()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "D:\fyeshi\project\quantum\Coms\devices\client.py", line 141, in request_key
+    print(f"[{self.device_id}] \u274c Key request failed: {e}")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Akash Santhnu Sundar\AppData\Local\Programs\Python\Python314\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u274c' in position 14: character maps to <undefined>
+
+======================================================================
+ERROR: test_encryption_without_key (test_system.TestSoldierDevice.test_encryption_without_key)
+Test that encryption fails without key.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\fyeshi\project\quantum\Coms\tests\test_system.py", line 172, in test_encryption_without_key
+    result = self.device.send_encrypted_message("Recipient", "Test message")
+  File "D:\fyeshi\project\quantum\Coms\devices\client.py", line 176, in send_encrypted_message
+    print(f"[{self.device_id}] \u274c No key available. Call request_key() first.")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Akash Santhnu Sundar\AppData\Local\Programs\Python\Python314\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u274c' in position 14: character maps to <undefined>
+
+======================================================================
+ERROR: test_key_request (test_system.TestSoldierDevice.test_key_request)
+Test device can request key from KMS.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\fyeshi\project\quantum\Coms\devices\client.py", line 138, in request_key
+    print(f"[{self.device_id}] \u2713 Key established")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Akash Santhnu Sundar\AppData\Local\Programs\Python\Python314\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 14: character maps to <undefined>
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\fyeshi\project\quantum\Coms\tests\test_system.py", line 164, in test_key_request
+    result = self.device.request_key()
+  File "D:\fyeshi\project\quantum\Coms\devices\client.py", line 141, in request_key
+    print(f"[{self.device_id}] \u274c Key request failed: {e}")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Akash Santhnu Sundar\AppData\Local\Programs\Python\Python314\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u274c' in position 14: character maps to <undefined>
+
+======================================================================
+FAIL: test_partial_interception (test_system.TestBB84Simulator.test_partial_interception)
+Test partial eavesdropping produces intermediate QBER.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\fyeshi\project\quantum\Coms\tests\test_system.py", line 78, in test_partial_interception
+    self.assertLess(qber, 0.20)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^
+AssertionError: 0.245136186770428 not less than 0.2
+
+----------------------------------------------------------------------
+Ran 22 tests in 0.014s
+
+FAILED (failures=1, errors=8)
+============================================================
+  QSTCS End-to-End Verification
+============================================================
+
+[1] Alpha creates session with Bravo
+    Session: d005b486561942fea1cb70ec4baa5ee2
+    QBER: 0.81%
+    Key (Alpha): 08fd8391fd1ddba83f416185...
+
+[2] Bravo joins session
+    Key (Bravo): 08fd8391fd1ddba83f416185...
+    Keys identical: True
+
+[3] Alpha encrypts a message
+    Plaintext:  Grid ref 842156 — 2x armored vehicles moving east....
+    Ciphertext: 8a441d462c0b7c99923265aa23dbd75b031ed218b1bcf896...
+    Nonce:      97693247f4f0c8cfa69c1d59
+
+[4] Bravo decrypts with same key
+    Decrypted:  Grid ref 842156 — 2x armored vehicles moving east....
+    Match: True
+
+[5] Eve activates on quantum channel
+    Status: RED
+    QBER:   27.82%
+    Attacks detected: 1
+
+[6] Link health
+    Status: RED
+    Sessions: 1
+    Keys issued: 1
+    Eve active: False
+
+[7] Reset
+    Status after reset: GREEN
+
+============================================================
+[Soldier_A] Device initialized
+[Soldier_B] Device initialized
+[Soldier_A] Requesting key from KMS...
+[Device] Device initialized
+[Device] Requesting key from KMS...
+[Sender] Device initialized
+[Receiver] Device initialized
+[Sender] Requesting key from KMS...
+[Sender] Device initialized
+[Receiver] Device initialized
+[Sender] Requesting key from KMS...
+[TestSoldier] Device initialized
+[TestSoldier] Requesting key from KMS...
+[TestSoldier] Device initialized
+[TestSoldier] Device initialized
+[TestSoldier] Requesting key from KMS...

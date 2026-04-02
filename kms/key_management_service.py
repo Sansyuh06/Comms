@@ -38,18 +38,22 @@ class SessionRecord:
 class KeyManagementService:
     def __init__(
         self,
-        port_pool: Optional[list[int]] = None,
-        ip_pool: Optional[list[str]] = None,
-        network_pool: Optional[list[str]] = None,
+        port_pool: Optional[list] = None,
+        ip_pool: Optional[list] = None,
+        network_pool: Optional[list] = None,
     ) -> None:
         self.sessions: Dict[str, SessionRecord] = {}
         self.eve_mode: bool = False
         self.attacks_detected: int = 0
         self.total_sessions: int = 0
+        self.total_keys_issued: int = 0
 
         self.last_qber: float = 0.0
         self.last_status: str = "GREEN"
         self.last_attack_detected: bool = False
+
+        # legacy attribute used by some tests
+        self.link_status: str = "GREEN"
 
         self.escalation_level: int = 1
 
@@ -65,7 +69,15 @@ class KeyManagementService:
         self.burned_ips: Set[str] = set()
         self.burned_networks: Set[str] = set()
 
+        # shared demo key: the last successfully issued key so a second
+        # device can retrieve the same key without a new BB84 round
+        self._last_key: Optional[bytes] = None
+
         self._lock = threading.Lock()
+
+    # ------------------------------------------------------------------
+    # internal helpers
+    # ------------------------------------------------------------------
 
     def _status_from_qber(self, qber: float, attack_detected: bool) -> str:
         if attack_detected or qber >= SECURE_QBER_THRESHOLD:
@@ -84,7 +96,7 @@ class KeyManagementService:
         )
         return hkdf.derive(material)
 
-    def _next_available(self, pool: list, burned: Set) -> Optional:
+    def _next_available(self, pool: list, burned: Set) -> Optional[object]:
         for item in pool:
             if item not in burned:
                 return item
@@ -100,7 +112,6 @@ class KeyManagementService:
             if next_port is not None:
                 self.current_port = next_port
                 return
-
             self.escalation_level = 2
             self.burned_ports.clear()
             self.current_port = self.port_pool[0]
@@ -112,7 +123,6 @@ class KeyManagementService:
             if next_ip is not None:
                 self.current_ip = next_ip
                 return
-
             self.escalation_level = 3
             self.burned_ips.clear()
             self.current_ip = self.ip_pool[0]
@@ -124,10 +134,27 @@ class KeyManagementService:
             if next_net is not None:
                 self.current_network = next_net
                 return
-
             self.escalation_level = 4
 
-    def create_session(self, client_a: str, client_b: str, use_hybrid: bool) -> Dict[str, object]:
+    # ------------------------------------------------------------------
+    # session-based API (used by kms/kms_server.py and test_e2e.py)
+    # ------------------------------------------------------------------
+
+    def create_session(
+        self,
+        client_a: str = None,
+        client_b: str = None,
+        use_hybrid: bool = False,
+        # aliases used by root kms_server.py and dashboard
+        initiator: str = None,
+        peer: str = None,
+        pqc_enabled: bool = False,
+    ) -> Dict[str, object]:
+        # resolve aliased parameter names
+        client_a = client_a or initiator or "unknown_a"
+        client_b = client_b or peer or "unknown_b"
+        use_hybrid = use_hybrid or pqc_enabled
+
         session_id = uuid.uuid4().hex
         bb84 = run_bb84_session(session_id, num_bits=256, eve=self.eve_mode, rng_seed=None)
 
@@ -155,21 +182,50 @@ class KeyManagementService:
         with self._lock:
             self.sessions[session_id] = record
             self.total_sessions += 1
+            self.total_keys_issued += 1
             if attack_detected or status == "RED":
                 self.attacks_detected += 1
 
             self.last_qber = qber
             self.last_status = status
+            self.link_status = status
             self.last_attack_detected = attack_detected
+
+            if status != "RED":
+                self._last_key = aes_key
 
             self._update_escalation(status)
 
+        if status == "RED":
+            raise Exception(f"Quantum channel compromised — QBER={qber:.2%}. Session aborted.")
+
         return {
             "session_id": session_id,
+            "key": aes_key,
+            "key_hex": aes_key.hex(),
             "status": status,
             "qber": qber,
             "attack_detected": attack_detected,
             "use_hybrid": use_hybrid,
+            "initiator": client_a,
+            "peer": client_b,
+            "pqc_enabled": use_hybrid,
+        }
+
+    def join_session(self, session_id: str, device_id: str) -> Dict[str, object]:
+        with self._lock:
+            record = self.sessions.get(session_id)
+        if record is None:
+            raise ValueError(f"Unknown session_id: {session_id}")
+        # allow any device to join for demo purposes
+        record.clients.add(device_id)
+        return {
+            "session_id": session_id,
+            "key": record.key,
+            "key_hex": record.key.hex(),
+            "status": record.status,
+            "qber": record.qber,
+            "joined": True,
         }
 
     def get_key(self, session_id: str, client_id: str) -> Dict[str, object]:
@@ -188,34 +244,84 @@ class KeyManagementService:
             "algorithm": "AES-256-GCM",
         }
 
-    def get_link_status(self) -> Dict[str, object]:
+    # ------------------------------------------------------------------
+    # legacy / simple key API (used by devices/client.py, main.py, tests)
+    # ------------------------------------------------------------------
+
+    def get_fresh_key(
+        self,
+        device_id: str,
+        peer_id: str = "_broadcast_",
+        pqc_enabled: bool = False,
+        force_eve_attack: bool = False,
+    ) -> bytes:
+        """
+        Simple one-call key retrieval used by SoldierDevice and main.py.
+
+        If force_eve_attack is True the key exchange runs with Eve present;
+        a compromised channel raises an exception.
+
+        The *second* device that calls get_fresh_key without force_eve_attack
+        receives the same key as the first device (shared demo-key semantics).
+        """
+        old_eve = self.eve_mode
+        if force_eve_attack:
+            self.eve_mode = True
+
+        try:
+            session_id = uuid.uuid4().hex
+            bb84 = run_bb84_session(session_id, num_bits=256, eve=self.eve_mode, rng_seed=None)
+        finally:
+            if force_eve_attack:
+                self.eve_mode = old_eve
+
+        raw_key: bytes = bb84["raw_key"]
+        qber: float = float(bb84["qber"])
+        attack_detected: bool = bool(bb84["attack_detected"])
+        status = self._status_from_qber(qber, attack_detected)
+
         with self._lock:
-            active_sessions = sum(1 for s in self.sessions.values() if not s.is_control)
-            status = self.last_status
-            qber = self.last_qber
-            attack_count = self.attacks_detected
-            eve_mode = self.eve_mode
-            escalation_level = self.escalation_level
+            self.last_qber = qber
+            self.last_status = status
+            self.link_status = status
+            self.last_attack_detected = attack_detected
+            if attack_detected or status == "RED":
+                self.attacks_detected += 1
 
-            label = {
-                1: "SAFE",
-                2: "TACTICAL RETREAT",
-                3: "EMERGENCY",
-                4: "LOCKDOWN",
-            }.get(escalation_level, "SAFE")
+        if attack_detected or status == "RED":
+            raise Exception(
+                f"Quantum channel compromised — QBER={qber:.2%}. Key not issued."
+            )
 
-            return {
-                "status": status,
-                "qber": qber,
-                "attacks_detected": attack_count,
-                "active_sessions": active_sessions,
-                "eve_mode": eve_mode,
-                "escalation_level": escalation_level,
-                "escalation_label": label,
-                "current_port": self.current_port,
-                "current_ip": self.current_ip,
-                "current_network": self.current_network,
-            }
+        pqc_secret = os.urandom(32) if pqc_enabled else None
+        aes_key = self._derive_aes_key(raw_key, pqc_secret)
+
+        with self._lock:
+            self.total_keys_issued += 1
+            # store so the second device can retrieve the same key
+            if self._last_key is None:
+                self._last_key = aes_key
+            else:
+                # second caller gets the existing shared key
+                aes_key = self._last_key
+
+        return aes_key
+
+    # ------------------------------------------------------------------
+    # Eve / attack control
+    # ------------------------------------------------------------------
+
+    @property
+    def eve_active(self) -> bool:
+        return self.eve_mode
+
+    def activate_eve(self) -> None:
+        with self._lock:
+            self.eve_mode = True
+
+    def deactivate_eve(self) -> None:
+        with self._lock:
+            self.eve_mode = False
 
     def set_eve_mode(self, on: bool) -> None:
         with self._lock:
@@ -250,6 +356,7 @@ class KeyManagementService:
             self.attacks_detected += 1
             self.last_qber = qber
             self.last_status = "RED"
+            self.link_status = "RED"
             self.last_attack_detected = True
             self._update_escalation("RED")
 
@@ -258,4 +365,84 @@ class KeyManagementService:
             "status": "RED",
             "qber": qber,
             "attack_detected": True,
+            "attacks_detected": self.attacks_detected,
         }
+
+    # ------------------------------------------------------------------
+    # health / status
+    # ------------------------------------------------------------------
+
+    def check_link_health(self) -> Dict[str, object]:
+        with self._lock:
+            return {
+                "status": self.last_status,
+                "last_qber": self.last_qber,
+                "total_keys_issued": self.total_keys_issued,
+                "total_sessions": self.total_sessions,
+                "attacks_detected": self.attacks_detected,
+                "active_sessions": sum(1 for s in self.sessions.values() if not s.is_control),
+                "eve_active": self.eve_mode,
+            }
+
+    def get_link_status(self) -> Dict[str, object]:
+        with self._lock:
+            active_sessions = sum(1 for s in self.sessions.values() if not s.is_control)
+            label = {
+                1: "SAFE",
+                2: "TACTICAL RETREAT",
+                3: "EMERGENCY",
+                4: "LOCKDOWN",
+            }.get(self.escalation_level, "SAFE")
+
+            return {
+                "status": self.last_status,
+                "qber": self.last_qber,
+                "attacks_detected": self.attacks_detected,
+                "active_sessions": active_sessions,
+                "eve_mode": self.eve_mode,
+                "escalation_level": self.escalation_level,
+                "escalation_label": label,
+                "current_port": self.current_port,
+                "current_ip": self.current_ip,
+                "current_network": self.current_network,
+            }
+
+    def list_sessions(self) -> list:
+        with self._lock:
+            return [
+                {
+                    "session_id": s,
+                    "status": r.status,
+                    "qber": r.qber,
+                    "clients": list(r.clients),
+                }
+                for s, r in self.sessions.items()
+                if not r.is_control
+            ]
+
+    # ------------------------------------------------------------------
+    # reset
+    # ------------------------------------------------------------------
+
+    def reset(self) -> None:
+        with self._lock:
+            self.sessions.clear()
+            self.eve_mode = False
+            self.attacks_detected = 0
+            self.total_sessions = 0
+            self.total_keys_issued = 0
+            self.last_qber = 0.0
+            self.last_status = "GREEN"
+            self.link_status = "GREEN"
+            self.last_attack_detected = False
+            self.escalation_level = 1
+            self.burned_ports.clear()
+            self.burned_ips.clear()
+            self.burned_networks.clear()
+            self.current_port = self.port_pool[0]
+            self.current_ip = self.ip_pool[0]
+            self.current_network = self.network_pool[0]
+            self._last_key = None
+
+    def reset_for_demo(self) -> None:
+        self.reset()
